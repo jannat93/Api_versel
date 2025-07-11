@@ -1,38 +1,24 @@
+// A CLEAN AND CORRECT API FILE
+
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const multer = "multer");
+const multer = require("multer");
 const cloudinary = require("cloudinary").v2;
-const { v4: uuidv4 } = require('uuid'); // You will need this for publications
+const { v4: uuidv4 } = require("uuid"); // Make sure to run: npm install uuid
 
 const app = express();
 
-// --- CORS CONFIGURATION MUST GO FIRST ---
-const allowedOrigins = [
-  'https://portfolio-rs-2-mxdi1m7vx-jannats-projects-4f506c24.vercel.app',
-  'http://localhost:5500', 
-  'http://127.0.0.1:5500'
-];
+// --- Middleware ---
 
-const corsOptions = {
-  origin: function (origin, callback) {
-    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  }
-};
+// This handles CORS. We allow any website to connect, which is simpler for now.
+app.use(cors()); 
 
-// Apply the configured CORS options before any routes
-app.use(cors(corsOptions));
-
-
-// --- OTHER MIDDLEWARE ---
 app.use(express.json());
 
 
-// --- CLOUDINARY CONFIGURATION ---
+// --- Cloudinary Configuration ---
+// This part reads your secret keys from Vercel's environment variables.
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -41,88 +27,70 @@ cloudinary.config({
 });
 
 
-// --- STORAGE FOR FILE UPLOADS ---
+// --- Code for Handling File Uploads ---
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
-
-// In-memory storage for publications. This will reset on deploy.
-let publications = [];
+let publications = []; // A temporary place to store text publications
 
 
-// --- API ROUTES ---
+// --- API ROUTES (The actions our API can do) ---
 
-// 1. GET / -> List all image/pdf files from Cloudinary
+// This action GETS all files from Cloudinary and sends them to the website.
 app.get("/", async (req, res) => {
   try {
-    const { resources } = await cloudinary.search
-      .expression('folder:portfolio_uploads')
-      .sort_by('public_id', 'desc')
-      .max_results(50)
-      .execute();
+    const [imageFiles, publicationData] = await Promise.all([
+        cloudinary.search.expression('folder:portfolio_uploads').sort_by('public_id', 'desc').max_results(50).execute(),
+        // For this simple version, publications are just in memory
+        Promise.resolve(publications) 
+    ]);
     
-    const files = resources.map(file => {
+    // Combine the file URLs and the publication data
+    const files = imageFiles.resources.map(file => {
         const parts = file.secure_url.split('/');
         return parts[parts.length - 1];
     });
 
-    res.json(files);
+    res.json({
+        files: files,
+        publications: publicationData
+    });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch files from Cloudinary" });
+    res.status(500).json({ error: "Failed to fetch data." });
   }
 });
 
 
-// 2. POST /upload -> Handles all file uploads
-app.post("/upload", upload.single("file"), async (req, res) => {
+// This action UPLOADS a new file.
+app.post("/upload", upload.single("file"), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: "No file uploaded." });
   }
-  try {
-    const uploadStream = cloudinary.uploader.upload_stream(
-      {
-        folder: "portfolio_uploads",
-        public_id: req.file.originalname.split('.')[0] 
-      },
-      (error, result) => {
-        if (error) {
-          return res.status(500).json({ error: "Upload to Cloudinary failed." });
-        }
-        res.json({ url: result.secure_url, public_id: result.public_id });
-      }
-    );
-    uploadStream.end(req.file.buffer);
-  } catch (err) {
-    res.status(500).json({ error: "Upload Failed" });
-  }
+
+  const uploadStream = cloudinary.uploader.upload_stream({ folder: "portfolio_uploads" }, (error, result) => {
+    if (error) {
+      return res.status(500).json({ error: "Upload failed." });
+    }
+    res.json({ url: result.secure_url });
+  });
+
+  uploadStream.end(req.file.buffer);
 });
 
 
-// 3. GET /publications -> Get list of text publications
-app.get('/publications', (req, res) => {
-  res.json(publications);
-});
-
-
-// 4. POST /publications -> Add a new text publication
+// This action ADDS a new text publication.
 app.post('/publications', (req, res) => {
     const { title, url } = req.body;
-    if (!title || !url) {
-        return res.status(400).json({ error: 'Title and URL are required.' });
-    }
     const newPub = { id: uuidv4(), title, url };
     publications.push(newPub);
     res.status(201).json(newPub);
 });
 
-
-// 5. DELETE /publications/:id -> Delete a text publication
+// This action DELETES a text publication.
 app.delete('/publications/:id', (req, res) => {
-    const { id } = req.params;
-    publications = publications.filter(pub => pub.id !== id);
+    publications = publications.filter(pub => pub.id !== req.params.id);
     res.status(204).send();
 });
 
 
-// --- EXPORT THE APP FOR VERCEL ---
-// DO NOT use app.listen()
+// --- This is required for Vercel to work ---
 module.exports = app;
